@@ -42,6 +42,21 @@
   bottom: 0;
 }
 
+.document-tree button {
+  border-radius: 2px;
+  border: 1px solid transparent;
+  padding: 0.2em 0.3em;
+  margin: 0.1em 0.1em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: ghostwhite;
+  color: black;
+  cursor: pointer;
+  border: 1px solid black;
+  transition: border-color 0.25s;
+}
+
 .document-tree {
   position: absolute;
   top: 0;
@@ -49,4 +64,15 @@
   bottom: 0;
   width: 200px;
   background-color: rgba(0,0,255,20%);
+  white-space: pre-line;
+  text-align: left;
+  z-index: 5;
+}
+
+.document-tree ul {
+  padding-inline-start: 20px;
+}
+
+.document-tree li {
+  list-style-type: none;
 }
