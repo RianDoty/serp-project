@@ -297,20 +297,24 @@ export class OptimizationManager {
 
         // Snap each router to its nearest assigned node
         this.routers.forEach((r) => {
-            const p = r.position
+            const p = r.position.clone()
             const closest = Array.from(r.points).reduce((best, current) => {
                 if (current.distanceTo(p) < best.distanceTo(p)) {
                     return current
                 }
                 return best
             })
-            r.position = closest
+            console.log(closest.toArray())
+            r.source.setPosition(closest)
+            console.log(r.position)
         })
 
         //Assign one more time, because positions have changed
         assign()
 
         console.log(`Solved with an average of ${this.getScore()}Mbps`)
+
+        this.routers.forEach(r => console.log(r.position))
     }
 
     getScore(): number {
@@ -414,6 +418,10 @@ export class Router extends Node {
         this.position = new THREE.Vector3(...position)
     }
 
+    getArgs(): { [key: string]: unknown } {
+        return {key: this.key, position: this.position.toArray()}
+    }
+
     getStrength(at: THREE.Vector3) {
         const distance = this.position.distanceTo(at)
 
@@ -423,6 +431,16 @@ export class Router extends Node {
     setPosition(p: THREE.Vector3, silent=false) {
         this.position = p.clone()
         if (!silent) this.onHeirarchyChange()
+    }
+
+    render() {
+        const color = 'teal'
+        console.log(this.position.toArray())
+        return (
+            <mesh key={this.key} position={this.position.clone().add(new THREE.Vector3(0,0.5,0))} material={new THREE.MeshPhongMaterial({ color, flatShading: true, transparent: true, depthTest: false })} renderOrder={999}>
+                <sphereGeometry args={[0.25]}/>
+            </mesh>
+        )
     }
 }
 
