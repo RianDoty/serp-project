@@ -1,5 +1,5 @@
-import { Point, Points } from "@react-three/drei"
-import { ThreeElements } from "@react-three/fiber"
+import { ThreeEvent, useThree } from "@react-three/fiber"
+import { useDrag } from "@use-gesture/react"
 import { ReactNode } from "react"
 import * as THREE from "three"
 
@@ -7,7 +7,7 @@ type Constructor = { new(...args: any[]): any }
 
 type JSONTree = { name: string, args: { [key: string]: unknown }, children: JSONTree[] }
 
-type PointCloud = [THREE.Vector3, Router|null][]
+type PointCloud = [THREE.Vector3, Router | null][]
 
 export class Node {
     parent?: Node
@@ -16,6 +16,7 @@ export class Node {
     source = this // Points to the actual node in the case of snapshots
     name = 'Node'
     children = new Set<Node>()
+    readonly isObject = false as const
 
     constructor({ key = String(Math.floor(Math.random() * 1000000000)) }: { key?: string } = {}) {
         this.key = key
@@ -34,6 +35,10 @@ export class Node {
         if (!silent) this.onHeirarchyChange()
     }
 
+    onSelectionChange(selected: boolean) {
+        this.selected = selected
+    }
+
     deleteSelf(silent = false) {
         this.parent?.remove(this)
         if (this.parent && !silent) this.onHeirarchyChange()
@@ -44,8 +49,16 @@ export class Node {
         return this
     }
 
-    findFirst(name: string) {
+    findFirstDescendant(name: string) {
         return this.getDescendants(true).find(n => n.name === name)
+    }
+
+    findFirstAncestor(name: string) {
+        let parent = this.parent
+        while (parent) {
+            if (parent.name === name) return parent
+            parent = parent.parent
+        }
     }
 
     getDescendants(includeThis = false): Node[] {
@@ -74,12 +87,16 @@ export class Node {
         return out
     }
 
-    render(): ReactNode {
-        return <>{Array.from(this.children).map(c => c.render())}</>
+    render(camera: THREE.PerspectiveCamera): ReactNode {
+        return <>{Array.from(this.children).map(c => c.render(camera))}</>
     }
 
     getArgs(): { [key: string]: unknown } {
         return { key: this.key }
+    }
+
+    isSnapshot() {
+        return this.source === this
     }
 
     toJSON(): JSONTree {
@@ -137,6 +154,38 @@ export class Node {
     }
 }
 
+// A node, but with a position and size that signal properly when changed
+export class ObjectNode extends Node {
+    position: THREE.Vector3
+    size: THREE.Vector3
+    readonly isObject = true as const
+
+    constructor({ key, position = [0, 0, 0], size = [1, 1, 1] }: { key?: string, position?: THREE.Vector3Tuple, size?: THREE.Vector3Tuple } = {}) {
+        super({ key })
+        this.position = new THREE.Vector3(...position)
+        this.size = new THREE.Vector3(...size)
+    }
+
+    setPosition(position: THREE.Vector3, silent = false) {
+        this.source.position = position.clone()
+        if (!silent) this.onHeirarchyChange()
+    }
+
+    setSize(size: THREE.Vector3, silent = false) {
+        const newPosArray = size.toArray()
+        const equal = this.size.toArray().every((component, i) => newPosArray[i] === component)
+
+        if (!equal) {
+            // Putting the code that sets the position inside of this condition because
+            // it might just save me from dumbassery later when i accidentally depend on
+            // the positon still being the same object it was, and not just having
+            // the same value
+            this.size = size.clone()
+            if (!silent) this.onHeirarchyChange()
+        }
+    }
+}
+
 export class Model extends Node {
     declare children: Set<Node>
     listeners: Set<() => void>
@@ -170,10 +219,6 @@ export class Model extends Node {
         this.reRender()
     }
 
-    onSelectionChange() {
-        this.reRender()
-    }
-
     reRender() {
         console.log('Model re-rendering')
         this.generateSnapshot()
@@ -194,12 +239,12 @@ export class Model extends Node {
 export class SelectionManager {
     nodes: Set<Node>
     model: Model
-    selected: Node | null
+    selected: Node | null = null
+    isDragging = false
 
     constructor(model: Model) {
         this.model = model
         this.nodes = new Set()
-        this.selected = null
     }
 
     select(node: Node) {
@@ -207,16 +252,26 @@ export class SelectionManager {
 
         console.log(`${node.constructor.name} selected!`)
         if (this.selected !== null) {
-            this.selected.selected = false
+            this.unselect()
         }
         this.selected = node
         node.selected = true
+        node.onSelectionChange(true)
 
-        this.model.onSelectionChange()
+        this.model.reRender()
     }
 
     unselect() {
+        if (this.selected !== null) {
+            this.selected.selected = false
+            this.selected.onSelectionChange(false)
+        }
         this.selected = null
+    }
+
+    setIsDragging(dragging: boolean) {
+        this.isDragging = dragging
+        this.model.reRender()
     }
 
     isSelected(node: Node) {
@@ -259,6 +314,7 @@ export class OptimizationManager {
             this.routers.add(new Router({ position: rooms[i].position.clone().toArray() }).addTo(this.model))
         }
 
+        /// K-MEANS ///
         let iter = 0
         let reassignments = 0
         const assign = () => {
@@ -294,6 +350,7 @@ export class OptimizationManager {
                 r.setPosition(mean, true)
             })
         } while (iter < 10 && reassignments > 0)
+        /// K-MEANS ///
 
         // Snap each router to its nearest assigned node
         this.routers.forEach((r) => {
@@ -314,7 +371,7 @@ export class OptimizationManager {
 
         console.log(`Solved with an average of ${this.getScore()}Mbps`)
 
-        this.routers.forEach(r => console.log(r.position))
+        return this.getScore()
     }
 
     getScore(): number {
@@ -332,7 +389,7 @@ export class OptimizationManager {
     }
 }
 
-export class Floor extends Node {
+export class Floor extends ObjectNode {
     height: number
     name = 'Floor'
 
@@ -341,29 +398,35 @@ export class Floor extends Node {
         this.height = height
     }
 
-    getArgs(): { [key: string]: unknown } {
-        return { height: this.height, key: this.key }
+    setPosition(position: THREE.Vector3, silent?: boolean): void {
+        this.height = position.y
+        super.setPosition(position, silent)
     }
 
-    render() {
+    getArgs(): { [key: string]: unknown } {
+        return { height: this.position.y || this.height, key: this.key }
+    }
+
+    render(camera: THREE.PerspectiveCamera) {
+        this.position.y = this.height
+        if (this.height !== 0) return <>{super.render(camera)}</>
+        
         return (
             <>
-                <gridHelper key={this.key} position={new THREE.Vector3(0, this.height, 0)} />
-                {Array.from(this.children).map(c => c.render())}
+                <gridHelper key={this.key} position={this.position} material={new THREE.LineBasicMaterial({ color: 'lightgray' })} />
+                {super.render(camera)}
             </>
         )
     }
 }
 
-export class Room extends Node {
-    position: THREE.Vector3
-    size: THREE.Vector3
+export class Room extends ObjectNode {
+    color: string
     name = 'Room'
 
     constructor({ key, position = [0, 0, 0], size = [1, 1, 1] }: { key?: string, position?: THREE.Vector3Tuple, size?: THREE.Vector3Tuple } = {}) {
-        super({ key })
-        this.position = new THREE.Vector3(...position)
-        this.size = new THREE.Vector3(...size)
+        super({ key, position, size })
+        this.color = 'white'
     }
 
     getArgs() {
@@ -373,34 +436,68 @@ export class Room extends Node {
     getPointCloud(): THREE.Vector3[] {
         const out: THREE.Vector3[] = []
 
-        for (let x = 0; x < this.size.x; x++) {
-            // Don't optimize for points more than 2 above the ground,
-            // because there usually aren't computers that high.
-            for (let y = 0; y < this.size.y && y <= 2; y++) {
-                for (let z = 0; z < this.size.z; z++) {
-                    out.push(this.position.clone().add(new THREE.Vector3(x, y, z)))
+        const density = 2
+        const step = 1 / density
+        // Not actually the bottom bottom corner, but tucked inside of the cube a bit depending on the used density.
+        const bottomCorner = this.position.clone().add(this.size.clone().multiplyScalar(-0.5)).add(new THREE.Vector3(1, 1, 1).divideScalar(2 * density))
+        for (let x = 0; x < this.size.x; x += step) {
+            for (let y = 0; y < this.size.y; y += step) {
+                for (let z = 0; z < this.size.z; z += step) {
+                    out.push(bottomCorner.clone().add(new THREE.Vector3(x, y, z)))
                 }
             }
         }
+        function isEven(n: number) {
+            return n % 2 === 0
+        }
+        if (isEven(this.size.x) || isEven(this.size.y) || isEven(this.size.z)) out.push(this.position.clone())
 
         return out
     }
 
-    render() {
-        const position = new THREE.Vector3().copy(this.position)
+    onSelectionChange(selected: boolean): void {
+        this.color = selected ? 'lightblue' : 'white'
+        // if (selected) {
+        //     this.add(new Handles(), true)
+        // } else {
+        //     const handles = this.findFirstDescendant('Handles')
+        //     if (handles) this.remove(handles, true)
+        // }
+    }
 
-        const height = (this?.parent as Floor)?.height
+    render(camera: THREE.PerspectiveCamera) {
+        const selectionManager = (this.findFirstAncestor('Model') as Model).source.selectionManager
+        const position = this.source.position
+
+        // Snap height to above the nearest floor
+        const height = (this.findFirstAncestor('Floor') as Floor)?.height
         if (typeof height === 'number') {
             position.setY(height + this.size.y / 2)
         }
 
-        const color = this.selected ? 'lightblue' : 'white'
+        // DEBUG: Visualize the point cloud
+        const showPoints = false
+        const pointColor = 'red'
+        const points = showPoints ? this.source.getPointCloud().map(p => (
+            <mesh position={p} material={new THREE.MeshPhongMaterial({ color: pointColor, flatShading: true, transparent: true, depthTest: false })} renderOrder={998}>
+                <sphereGeometry args={[0.1]} />
+            </mesh>
+        )) : null
+
+        function DraggableRoom({ room, onClick }: { room: Room, onClick: (e: ThreeEvent<MouseEvent>) => void }) {
+
+            return (
+                <mesh onClick={onClick} material={new THREE.MeshPhongMaterial({ color: room.color, flatShading: true, transparent: true })} position={position}>
+                    <boxGeometry args={room.size.toArray()} />
+                </mesh>
+            )
+        }
+
         return (
             <>
-                <mesh key={this.key} material={new THREE.MeshPhongMaterial({ color, flatShading: true, transparent: true })} position={position}>
-                    <boxGeometry args={this.size.toArray()} />
-                    {Array.from(this.children).map(c => c.render())}
-                </mesh>
+                <DraggableRoom key={this.key} room={this.source} onClick={() => selectionManager.select(this.source)} />
+                {super.render(camera)}
+                {points}
             </>
         )
     }
@@ -410,7 +507,7 @@ export class Router extends Node {
     name = 'Router'
     position: THREE.Vector3
     points = new Set<THREE.Vector3>()
-    strength = 1
+    strength = 45
     halfDistance = 5 //The amount of units away it takes for the signal strength to decrease by half
 
     constructor({ key, position = [0, 0, 0] }: { key?: string, position?: THREE.Vector3Tuple } = {}) {
@@ -419,7 +516,7 @@ export class Router extends Node {
     }
 
     getArgs(): { [key: string]: unknown } {
-        return {key: this.key, position: this.position.toArray()}
+        return { key: this.key, position: this.position.toArray() }
     }
 
     getStrength(at: THREE.Vector3) {
@@ -428,21 +525,101 @@ export class Router extends Node {
         return this.strength * (1 / 2) ** (distance / this.halfDistance)
     }
 
-    setPosition(p: THREE.Vector3, silent=false) {
+    setPosition(p: THREE.Vector3, silent = false) {
         this.position = p.clone()
         if (!silent) this.onHeirarchyChange()
     }
 
     render() {
         const color = 'teal'
-        console.log(this.position.toArray())
         return (
-            <mesh key={this.key} position={this.position.clone().add(new THREE.Vector3(0,0.5,0))} material={new THREE.MeshPhongMaterial({ color, flatShading: true, transparent: true, depthTest: false })} renderOrder={999}>
-                <sphereGeometry args={[0.25]}/>
+            <mesh key={this.key} position={this.position} material={new THREE.MeshPhongMaterial({ color, flatShading: true, transparent: true, depthTest: false })} renderOrder={999}>
+                <sphereGeometry args={[0.25]} />
             </mesh>
         )
     }
 }
+
+
+// export class Handles extends Node {
+//     declare parent?: Node
+//     target?: ObjectNode
+//     name = 'Handles'
+
+//     add(node: ObjectNode, silent = false) {
+//         if (!node.position) throw Error(`Node ${this.constructor.name} is being parented to node ${node.constructor.name}, which does not have a position!`)
+//         super.add(node, silent)
+//     }
+
+//     setTarget(node: ObjectNode) {
+//         this.target = node
+//     }
+
+//     render(camera: THREE.PerspectiveCamera) {
+//         if (!this.target && this.parent && (this.parent as ObjectNode)?.position) {
+//             this.target = this.parent as ObjectNode
+//         }
+
+
+
+//         const getMouseHitPlane = (point: THREE.Vector3, along: THREE.Vector3) => {
+//             const cameraLook = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+//             const cross = cameraLook.clone().cross(along)
+//             const normal = cross.clone().cross(cameraLook)
+//             const plane = new THREE.Plane(normal, point.clone().dot(normal))
+
+//             return plane
+//         }
+
+//         const HandlesComponent = ({ onSizeChange }: { onSizeChange: (size: Partial<{ x: number, y: number, z: number }>) => void }) => {
+//             if (!this.target) return (<></>)
+
+//             const bindUp = useDrag(({ active, movement: [x, y], timeStamp, event }) => {
+//                 if (active) {
+
+//                 }
+//                 console.log('Up')
+//             })
+
+//             const bindForward = useDrag(({ active, movement: [x, y], timeStamp, event }) => {
+//                 if (active) {
+
+//                 }
+//                 console.log('Forward')
+//             })
+
+//             const bindRight = useDrag(({ active, movement: [x, y], timeStamp, event }) => {
+//                 if (active) {
+
+//                 }
+//                 console.log('Right')
+//             })
+
+//             const pos = this.target.position
+//             const right = new THREE.Vector3(1, 0, 0)
+//             const up = new THREE.Vector3(0, 1, 0)
+//             const forward = new THREE.Vector3(0, 0, 1)
+//             const scale = (v0: THREE.Vector3, s: number) => v0.clone().multiplyScalar(s)
+//             const mult = (v0: THREE.Vector3, v1: THREE.Vector3) => new THREE.Vector3().multiplyVectors(v0, v1)
+//             const add = (v0: THREE.Vector3, v1: THREE.Vector3) => v0.clone().add(v1)
+//             return (
+//                 <>
+//                     <arrowHelper {...bindForward} key={this.key} args={[forward, add(pos, mult(this.target.size, scale(forward, 0.5))), 1.5, 'blue', 1, 0.5]} />
+//                     <arrowHelper {...bindUp} key={this.key + 1} args={[up, add(pos, mult(this.target.size, scale(up, 0.5))), 1.5, 'green', 1, 0.5]} />
+//                     <arrowHelper {...bindRight} key={this.key + 2} args={[right, add(pos, mult(this.target.size, scale(right, 0.5))), 1.5, 'red', 1, 0.5]} />
+//                 </>
+//             )
+
+//         }
+
+//         return (
+//             <>
+//                 <HandlesComponent onSizeChange={() => {}}/>
+//                 {super.render(camera)}
+//             </>
+//         )
+//     }
+// }
 
 const fromJSONDictionary: { [key: string]: (...args: any[]) => Node } = {
     "Node": (...args) => new Node(...args),

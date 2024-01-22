@@ -1,21 +1,21 @@
-import { FormEventHandler, useState, useSyncExternalStore } from "react"
+import { FormEventHandler, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import floorSvg from "./assets/floor.svg"
 import boxSvg from "./assets/box.svg"
 import routerSvg from './assets/router.svg'
-import { Canvas } from "@react-three/fiber"
+import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
-import { Floor, Model, Node, Room } from "./editor-classes"
+import { Floor, Model, Node, ObjectNode, Room } from "./editor-classes"
+import roosevelt from './assets/examples/example1.json'
+import * as THREE from 'three'
 
-const myModel = new Model()
-const myFloor = new Floor()
-const myRoom1 = new Room()
-myModel.add(myFloor)
-myFloor.add(myRoom1)
+const myModel = Node.fromJSON(roosevelt)
 
-function Workspace({ model }: { model: Model }) {
+function Workspace() {
+    const model = useSyncExternalStore(myModel.subscribe, myModel.getSnapshot)
+    const {camera}: {camera: THREE.PerspectiveCamera} = useThree()
 
     return (
-        <Canvas>
+        <>
             <directionalLight
                 position={[3.3, 3.0, 4.4]}
                 castShadow
@@ -27,8 +27,8 @@ function Workspace({ model }: { model: Model }) {
                 intensity={Math.PI / 2}
             />
             <OrbitControls />
-            {model.render()}
-        </Canvas>
+            {model.render(camera)}
+        </>
     )
 }
 
@@ -71,6 +71,11 @@ function JSONConverter({ model }: { model: Model }) {
 }
 
 function TopBar({ model }: { model: Model }) {
+    const [routerCount, setRouterCount] = useState('1')
+    const [avgSpeed, setAvgSpeed] = useState('N/A')
+
+    const roomCount = model.getDescendants(true).filter(d => d.name === 'Room').length
+
     const onFloorClick = () => {
         new Floor({ height: 1 }).addTo(model.source)
         console.log(model.source.tree())
@@ -81,13 +86,17 @@ function TopBar({ model }: { model: Model }) {
         if (model.source.selectionManager.selected?.name === 'Floor') {
             parent = model.source.selectionManager.selected.source
         } else {
-            parent = model.source.findFirst('Floor') as Floor
+            parent = model.source.findFirstDescendant('Floor') as Floor
         }
-        new Room({ position: [2, 0, 2] }).addTo(parent)
+        new Room().addTo(parent)
     }
 
     const onRouterClick = () => {
-        model.source.optimizationManager.optimize()
+        const count = Number(routerCount)
+
+        if (isNaN(count)) return setRouterCount('Invalid')
+
+        setAvgSpeed(String(model.source.optimizationManager.optimize(count)).slice(0,5)+'Mbps / 42Mbps MAX')
     }
 
     return (
@@ -101,6 +110,16 @@ function TopBar({ model }: { model: Model }) {
             <button id="router-button" onClick={onRouterClick}>
                 <img src={routerSvg} />
             </button>
+            <div>
+                Router Count <br/>
+                <input value={routerCount} onChange={e => setRouterCount(e.target.value)}/> <br/>
+                Room Count for Comparison: <br/>
+                <input readOnly value={roomCount}/>
+            </div>
+            <div>
+                Average Speed:
+                <input readOnly value={avgSpeed}/>
+            </div>
         </div>
     )
 }
@@ -132,6 +151,75 @@ function DocumentTree({ model }: { model: Model }) {
     )
 }
 
+function Inspector() {
+    const model = useSyncExternalStore(myModel.subscribe, myModel.getSnapshot)
+    const obj = model.source.selectionManager.selected?.source as Node | ObjectNode | null
+    const isObj = obj?.isObject
+    const [px, spx] = useState(isObj? String(obj.position.x) : '0')
+    const [py, spy] = useState(isObj? String(obj.position.y) : '0')
+    const [pz, spz] = useState(isObj? String(obj.position.z) : '0')
+    const [sx, ssx] = useState(isObj? String(obj.size.x) : '0')
+    const [sy, ssy] = useState(isObj? String(obj.size.y) : '0')
+    const [sz, ssz] = useState(isObj? String(obj.size.z) : '0')
+
+    useEffect(() => {
+        if (isObj) {
+            spx(String(obj.position.x))
+            spy(String(obj.position.y))
+            spz(String(obj.position.z))
+            ssx(String(obj.size.x))
+            ssy(String(obj.size.y))
+            ssz(String(obj.size.z))
+        }
+    }, [obj])
+
+    useEffect(() => {
+        const d = [px,py,pz,sx,sy,sz].map(v => Number(v))
+        console.log(d)
+        if (isObj && d.every(v => !Number.isNaN(v))) {
+            obj.source.setPosition(new THREE.Vector3(d[0],d[1],d[2]))
+            obj.source.setSize(new THREE.Vector3(d[3],d[4],d[5]))
+        }
+        
+    }, [px,py,pz,sx,sy,sz])
+    
+    if (!obj) return (
+        <div className="inspector">
+            <div className="object-name">
+                No Object Selected
+            </div>
+        </div>
+    )
+
+    if (!isObj) return (
+        <div className="inspector">
+            <div className="object-name">
+                {obj.name}
+            </div>
+        </div>
+    )
+
+    return (
+        <div className="inspector">
+            <div className="object-name">
+                {obj.name}
+            </div>
+            <div>
+                Position <br/>
+                <input value={px} onChange={e => spx(e.target.value)}/>
+                <input value={py} onChange={e => spy(e.target.value)}/>
+                <input value={pz} onChange={e => spz(e.target.value)}/>
+            </div>
+            <div>
+                Size <br/>
+                <input value={sx} onChange={e => ssx(e.target.value)}/>
+                <input value={sy} onChange={e => ssy(e.target.value)}/>
+                <input value={sz} onChange={e => ssz(e.target.value)}/>
+            </div>
+        </div>
+    )
+}
+
 function Editor() {
     const model = useSyncExternalStore(myModel.subscribe, myModel.getSnapshot)
 
@@ -140,7 +228,10 @@ function Editor() {
             <TopBar model={model} />
             <div className="canvas-area">
                 <DocumentTree model={model} />
-                <Workspace model={model} />
+                <Canvas>
+                    <Workspace />
+                </Canvas>
+                <Inspector/>
                 <JSONConverter model={model} />
             </div>
         </div>

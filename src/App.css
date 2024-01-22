@@ -9,7 +9,9 @@
   position: relative;
   aspect-ratio: 16/9;
   background-color: ghostwhite;
-  width:1200px;
+  width: 60vw;
+  max-width: 1200px;
+  
 }
 
 .top-bar {
@@ -20,6 +22,7 @@
 }
 
 .top-bar button {
+  user-select: none;
   height: 90px;
   width: 90px;
   padding: 5px;
@@ -34,7 +37,6 @@
 }
 
 .canvas-area {
-  background-color: rgba(0, 255, 0, 20%);
   position: absolute;
   top: 100px;
   left: 0;
@@ -42,7 +44,43 @@
   bottom: 0;
 }
 
+.document-tree {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 150px;
+  white-space: pre-line;
+  text-align: left;
+  z-index: 5;
+  pointer-events:stroke;
+  overflow-y: scroll;
+}
+
+.inspector {
+  position: absolute;
+  top: 50px;
+  right: 25px;
+  bottom: 300px;
+  width: 150px;
+  padding-top: 50px;
+  background-color: rgb(26 28 29);
+  border-radius: 10px;
+  border: 3px solid black;
+}
+
+.object-name {
+  position: relative;
+  margin-top: -50px;
+  background-color: rgb(34 38 39);
+}
+
+.inspector input {
+  max-width: 33px;
+}
+
 .document-tree button {
+  user-select: none;
   border-radius: 2px;
   border: 1px solid transparent;
   padding: 0.2em 0.3em;
@@ -55,18 +93,7 @@
   cursor: pointer;
   border: 1px solid black;
   transition: border-color 0.25s;
-}
-
-.document-tree {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 200px;
-  background-color: rgba(0,0,255,20%);
-  white-space: pre-line;
-  text-align: left;
-  z-index: 5;
+  pointer-events: auto;
 }
 
 .document-tree ul {
